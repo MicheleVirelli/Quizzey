@@ -3,19 +3,24 @@ import type { Profile } from "@/lib/types";
 
 /** Fetch the signed-in user and their profile (or nulls when signed out). */
 export async function getCurrentUserAndProfile() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { user: null, profile: null as Profile | null };
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { user: null, profile: null as Profile | null };
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single();
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .single();
 
-  return { user, profile: (profile as Profile | null) ?? null };
+    return { user, profile: (profile as Profile | null) ?? null };
+  } catch {
+    // Missing config or network error — treat as signed-out rather than crash.
+    return { user: null, profile: null as Profile | null };
+  }
 }
 
 /** A profile needs onboarding until it has a real username and a country. */

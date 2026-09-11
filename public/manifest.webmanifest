@@ -1,0 +1,17 @@
+{
+  "name": "Quizzey",
+  "short_name": "Quizzey",
+  "description": "Real-time 1v1 trivia across every topic.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#e11d48",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

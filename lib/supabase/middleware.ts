@@ -17,12 +17,20 @@ function isPublic(pathname: string) {
  * routes. Must run in middleware so cookies stay fresh for Server Components.
  */
 export async function updateSession(request: NextRequest) {
-  let response = NextResponse.next({ request });
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    {
+  // If the backend isn't configured, don't gate routes — never crash the app.
+  // The /health page will report the missing configuration.
+  if (!supabaseUrl || !supabaseKey) {
+    return NextResponse.next({ request });
+  }
+
+  let response = NextResponse.next({ request });
+  let user = null;
+
+  try {
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -37,16 +45,13 @@ export async function updateSession(request: NextRequest) {
           );
         },
       },
-    },
-  );
+    });
 
-  let user = null;
-  try {
     const { data } = await supabase.auth.getUser();
     user = data.user;
   } catch {
-    // Network / Supabase hiccup — treat as signed-out rather than 500.
-    user = null;
+    // Any Supabase/client/network error — degrade to signed-out, don't 500.
+    return NextResponse.next({ request });
   }
 
   if (!user && !isPublic(request.nextUrl.pathname)) {

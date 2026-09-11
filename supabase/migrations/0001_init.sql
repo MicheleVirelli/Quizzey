@@ -26,10 +26,12 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "Profiles are viewable by everyone" on public.profiles;
 create policy "Profiles are viewable by everyone"
   on public.profiles for select
   using (true);
 
+drop policy if exists "Users can update their own profile" on public.profiles;
 create policy "Users can update their own profile"
   on public.profiles for update
   using (auth.uid() = id)
@@ -53,11 +55,13 @@ create table if not exists public.topics (
 
 alter table public.topics enable row level security;
 
+drop policy if exists "Topics are viewable by everyone" on public.topics;
 create policy "Topics are viewable by everyone"
   on public.topics for select
   using (true);
 
 -- Authenticated users may propose topics (moderation added in a later phase).
+drop policy if exists "Authenticated users can create topics" on public.topics;
 create policy "Authenticated users can create topics"
   on public.topics for insert
   to authenticated
@@ -86,6 +90,7 @@ create index if not exists questions_topic_id_idx on public.questions (topic_id)
 
 alter table public.questions enable row level security;
 
+drop policy if exists "Questions are viewable by authenticated users" on public.questions;
 create policy "Questions are viewable by authenticated users"
   on public.questions for select
   to authenticated
@@ -115,16 +120,19 @@ create index if not exists matches_player_b_idx on public.matches (player_b);
 
 alter table public.matches enable row level security;
 
+drop policy if exists "Players can view their own matches" on public.matches;
 create policy "Players can view their own matches"
   on public.matches for select
   to authenticated
   using (auth.uid() = player_a or auth.uid() = player_b);
 
+drop policy if exists "Players can create matches they are in" on public.matches;
 create policy "Players can create matches they are in"
   on public.matches for insert
   to authenticated
   with check (auth.uid() = player_a);
 
+drop policy if exists "Players can update their own matches" on public.matches;
 create policy "Players can update their own matches"
   on public.matches for update
   to authenticated
@@ -150,6 +158,7 @@ create index if not exists match_answers_match_id_idx on public.match_answers (m
 alter table public.match_answers enable row level security;
 
 -- A user can read every answer of a match they take part in (to show opponent progress).
+drop policy if exists "Participants can view answers in their matches" on public.match_answers;
 create policy "Participants can view answers in their matches"
   on public.match_answers for select
   to authenticated
@@ -161,6 +170,7 @@ create policy "Participants can view answers in their matches"
     )
   );
 
+drop policy if exists "Users can insert their own answers" on public.match_answers;
 create policy "Users can insert their own answers"
   on public.match_answers for insert
   to authenticated
@@ -179,11 +189,13 @@ create index if not exists match_queue_topic_id_idx on public.match_queue (topic
 
 alter table public.match_queue enable row level security;
 
+drop policy if exists "Queue is viewable by authenticated users" on public.match_queue;
 create policy "Queue is viewable by authenticated users"
   on public.match_queue for select
   to authenticated
   using (true);
 
+drop policy if exists "Users manage their own queue entry" on public.match_queue;
 create policy "Users manage their own queue entry"
   on public.match_queue for all
   to authenticated

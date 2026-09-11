@@ -18,16 +18,22 @@ export default function Home() {
 
       <div className="flex w-full flex-col gap-3">
         <Link
-          href="/health"
+          href="/topics"
+          className="rounded-xl bg-brand-600 px-5 py-3 font-bold text-white transition hover:bg-brand-700"
+        >
+          Play now
+        </Link>
+        <Link
+          href="/sign-in"
           className="rounded-xl border border-neutral-200 px-5 py-3 font-semibold text-neutral-700 transition hover:bg-neutral-50 dark:border-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-900"
         >
-          Check backend status
+          Sign in
         </Link>
       </div>
 
-      <p className="text-xs text-neutral-400">
-        Setup in progress — accounts, topics and matches are on the way.
-      </p>
+      <Link href="/health" className="text-xs text-neutral-400 hover:underline">
+        Backend status
+      </Link>
     </main>
   );
 }

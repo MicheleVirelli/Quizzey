@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { SoloGame } from "@/components/SoloGame";
+import { TopicLobby } from "@/components/TopicLobby";
 import { QUESTIONS_PER_MATCH } from "@/lib/scoring";
 import { createClient } from "@/lib/supabase/server";
 import type { Question, Topic } from "@/lib/types";
@@ -42,20 +42,7 @@ export default async function PlayPage({
     .eq("topic_id", (topic as Topic).id);
 
   const pool = (questions as Question[] | null) ?? [];
-  const picked = shuffle(pool).slice(0, QUESTIONS_PER_MATCH);
+  const soloQuestions = shuffle(pool).slice(0, QUESTIONS_PER_MATCH);
 
-  if (picked.length === 0) {
-    return (
-      <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-4 px-6 text-center">
-        <p className="text-lg font-semibold">
-          This topic has no questions yet.
-        </p>
-        <a href="/topics" className="font-semibold text-brand-600 hover:underline">
-          ← Back to topics
-        </a>
-      </main>
-    );
-  }
-
-  return <SoloGame topic={topic as Topic} questions={picked} />;
+  return <TopicLobby topic={topic as Topic} soloQuestions={soloQuestions} />;
 }

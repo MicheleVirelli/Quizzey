@@ -15,6 +15,7 @@ export interface Profile {
   losses: number;
   ties: number;
   games_played: number;
+  is_moderator: boolean;
   created_at: string;
 }
 

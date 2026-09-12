@@ -196,6 +196,14 @@ export default async function ProfilePage({
           >
             Edit profile
           </Link>
+          {profile.is_moderator && (
+            <Link
+              href="/moderation"
+              className="rounded-xl border border-neutral-300 px-4 py-3 text-center font-semibold text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
+            >
+              🛡️ Moderation
+            </Link>
+          )}
           <form action={signOut}>
             <button className="w-full rounded-xl px-4 py-2 text-sm font-semibold text-neutral-500 hover:underline">
               Sign out

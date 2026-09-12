@@ -68,6 +68,7 @@ export default async function MatchPage({
       nameB={nameOf(match.player_b)}
       avatarA={avatarOf(match.player_a)}
       avatarB={avatarOf(match.player_b)}
+      startedAt={match.started_at ?? match.created_at}
       questions={questions}
       topicName={topic?.name ?? "Match"}
     />

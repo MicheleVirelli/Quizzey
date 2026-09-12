@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { FollowButton } from "@/components/FollowButton";
+import { InstallButton } from "@/components/InstallButton";
 import { TopicsDonut, type DonutSegment } from "@/components/TopicsDonut";
 import { signOut } from "@/lib/actions/auth";
 import { countryByCode } from "@/lib/countries";
@@ -212,6 +213,7 @@ export default async function ProfilePage({
               🛡️ Moderation
             </Link>
           )}
+          <InstallButton />
           <form action={signOut}>
             <button className="w-full rounded-xl px-4 py-2 text-sm font-semibold text-neutral-500 hover:underline">
               Sign out

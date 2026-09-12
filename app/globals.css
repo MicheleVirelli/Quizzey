@@ -13,3 +13,22 @@ html {
 body {
   min-height: 100dvh;
 }
+
+@keyframes pointPop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  40% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.point-pop {
+  animation: pointPop 0.45s ease-out;
+}

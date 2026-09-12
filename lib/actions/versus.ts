@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { QUESTIONS_PER_MATCH } from "@/lib/scoring";
+import { outcome, pointsForQuestion, QUESTIONS_PER_MATCH } from "@/lib/scoring";
 
 export interface VersusResult {
   scoreA: number;
@@ -12,18 +12,15 @@ export interface VersusResult {
 }
 
 /**
- * Record the final scores of a 1v1 match and mark it finished (which fires the
- * per-player win/loss/score + topic stats trigger).
+ * Compute the final scores of a 1v1 match from the persisted answers and mark
+ * it finished (which fires the per-player stats trigger). The first player to
+ * answer a question correctly (smallest time_ms) wins its points.
  *
- * Scores are computed on the clients from the realtime answer stream (which is
- * complete and matches what both players saw), then submitted here. Safe to
- * call by either player and more than once: only the first active -> finished
- * transition writes, so the trigger never double-counts.
+ * Reads from the database, so it is correct even if a player reloaded during
+ * the match. Safe to call by either player and more than once.
  */
-export async function submitVersusResult(
+export async function finalizeVersusMatch(
   matchId: string,
-  scoreA: number,
-  scoreB: number,
 ): Promise<VersusResult | { error: string }> {
   const supabase = await createClient();
   const {
@@ -51,33 +48,61 @@ export async function submitVersusResult(
     };
   }
 
-  const max = (match.question_ids as string[]).length + 1;
-  const a = Math.max(0, Math.min(max, Math.round(scoreA)));
-  const b = Math.max(0, Math.min(max, Math.round(scoreB)));
-  const winner = a > b ? match.player_a : b > a ? match.player_b : null;
+  const questionIds = match.question_ids as string[];
+  const posById = new Map(questionIds.map((id, i) => [id, i]));
+
+  const { data: answers } = await supabase
+    .from("match_answers")
+    .select("user_id, question_id, is_correct, time_ms")
+    .eq("match_id", matchId);
+
+  type Best = { userId: string; timeMs: number };
+  const bestByQuestion = new Map<string, Best>();
+  for (const a of answers ?? []) {
+    if (!a.is_correct) continue;
+    const qid = a.question_id as string;
+    const t = (a.time_ms as number | null) ?? Number.MAX_SAFE_INTEGER;
+    const cur = bestByQuestion.get(qid);
+    if (!cur || t < cur.timeMs) {
+      bestByQuestion.set(qid, { userId: a.user_id as string, timeMs: t });
+    }
+  }
+
+  let scoreA = 0;
+  let scoreB = 0;
+  for (const [qid, best] of bestByQuestion) {
+    const pos = posById.get(qid);
+    if (pos == null) continue;
+    const pts = pointsForQuestion(pos, questionIds.length);
+    if (best.userId === match.player_a) scoreA += pts;
+    else if (best.userId === match.player_b) scoreB += pts;
+  }
+
+  const code = outcome(scoreA, scoreB);
+  const winner =
+    code === "a" ? match.player_a : code === "b" ? match.player_b : null;
 
   await supabase
     .from("matches")
     .update({
       status: "finished",
-      score_a: a,
-      score_b: b,
+      score_a: scoreA,
+      score_b: scoreB,
       winner,
       finished_at: new Date().toISOString(),
     })
     .eq("id", matchId)
     .neq("status", "finished");
 
-  // Re-read so both players converge on the stored (first-writer) result.
   const { data: fresh } = await supabase
     .from("matches")
-    .select("score_a, score_b, winner, player_a, player_b")
+    .select("score_a, score_b, winner")
     .eq("id", matchId)
     .single();
 
   return {
-    scoreA: fresh?.score_a ?? a,
-    scoreB: fresh?.score_b ?? b,
+    scoreA: fresh?.score_a ?? scoreA,
+    scoreB: fresh?.score_b ?? scoreB,
     winner: fresh?.winner ?? winner,
     playerA: match.player_a,
     playerB: match.player_b,
@@ -86,8 +111,7 @@ export async function submitVersusResult(
 
 /**
  * Create a rematch: a new active match with the same two players (same topic)
- * and a fresh set of random questions. Called by the leader (player_a) once
- * both players have accepted the rematch.
+ * and fresh questions. Called by the host (player_a) once both players accept.
  */
 export async function createRematch(
   prevMatchId: string,

@@ -10,6 +10,7 @@ import {
   type SoloResult,
 } from "@/lib/actions/game";
 import { pointsForQuestion, SECONDS_PER_QUESTION } from "@/lib/scoring";
+import { orderedIndices } from "@/lib/shuffle";
 import type { Question, Topic } from "@/lib/types";
 
 const REVEAL_MS = 1400;
@@ -265,29 +266,31 @@ export function SoloGame({
         )}
 
         <div className="grid gap-3">
-          {current.answers.map((answer, i) => {
-            let cls =
-              "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900";
-            if (locked) {
-              if (i === current.correct_index) {
-                cls = "border-green-500 bg-green-50 dark:bg-green-950/50";
-              } else if (i === selected) {
-                cls = "border-brand-500 bg-brand-50 dark:bg-brand-950/50";
-              } else {
-                cls = "border-neutral-200 opacity-60 dark:border-neutral-800";
+          {orderedIndices(current.answers.length, current.id).map(
+            (originalIndex, j) => {
+              let cls =
+                "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900";
+              if (locked) {
+                if (originalIndex === current.correct_index) {
+                  cls = "border-green-500 bg-green-50 dark:bg-green-950/50";
+                } else if (originalIndex === selected) {
+                  cls = "border-brand-500 bg-brand-50 dark:bg-brand-950/50";
+                } else {
+                  cls = "border-neutral-200 opacity-60 dark:border-neutral-800";
+                }
               }
-            }
-            return (
-              <button
-                key={i}
-                disabled={locked}
-                onClick={() => lockAnswer(i)}
-                className={`rounded-xl border-2 px-4 py-4 text-left text-base font-medium transition ${cls}`}
-              >
-                {answer}
-              </button>
-            );
-          })}
+              return (
+                <button
+                  key={j}
+                  disabled={locked}
+                  onClick={() => lockAnswer(originalIndex)}
+                  className={`rounded-xl border-2 px-4 py-4 text-left text-base font-medium transition ${cls}`}
+                >
+                  {current.answers[originalIndex]}
+                </button>
+              );
+            },
+          )}
         </div>
       </div>
     </Shell>

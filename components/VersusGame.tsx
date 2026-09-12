@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { finalizeVersusMatch, type VersusResult } from "@/lib/actions/versus";
+import { submitVersusResult, type VersusResult } from "@/lib/actions/versus";
 import { pointsForQuestion, SECONDS_PER_QUESTION } from "@/lib/scoring";
 import { createClient } from "@/lib/supabase/client";
 import type { Question } from "@/lib/types";
@@ -63,6 +63,8 @@ export function VersusGame({
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lockedRef = useRef(false);
   const indexRef = useRef(0);
+  const myAnswersRef = useRef<Record<number, Answer>>({});
+  const oppAnswersRef = useRef<Record<number, Answer>>({});
   const phaseRef = useRef<Phase>("connecting");
   const questionStartRef = useRef(0);
   const startedRef = useRef(false);
@@ -82,21 +84,36 @@ export function VersusGame({
     intervalRef.current = null;
   }, []);
 
+  // Totals computed from the complete realtime answer stream (matches what
+  // both players saw on screen), split into player_a / player_b scores.
+  const computeScores = useCallback((): [number, number] => {
+    let my = 0;
+    let opp = 0;
+    for (let i = 0; i < total; i++) {
+      const mine = myAnswersRef.current[i];
+      const o = oppAnswersRef.current[i];
+      const pts = pointsForQuestion(i, total);
+      const myOk = mine?.correct;
+      const oppOk = o?.correct;
+      if (myOk && oppOk) {
+        if (mine.timeMs <= o.timeMs) my += pts;
+        else opp += pts;
+      } else if (myOk) my += pts;
+      else if (oppOk) opp += pts;
+    }
+    return [my, opp];
+  }, [total]);
+
   const finalize = useCallback(async () => {
     setPhaseSafe("finalizing");
-    const res = await finalizeVersusMatch(matchId);
+    const [myTotal, oppTotal] = computeScores();
+    const scoreA = isLeader ? myTotal : oppTotal;
+    const scoreB = isLeader ? oppTotal : myTotal;
+    const res = await submitVersusResult(matchId, scoreA, scoreB);
     if (!mountedRef.current) return;
-    if ("error" in res) {
-      setTimeout(async () => {
-        const retry = await finalizeVersusMatch(matchId);
-        if (mountedRef.current && !("error" in retry)) setResult(retry);
-        if (mountedRef.current) setPhaseSafe("finished");
-      }, 1500);
-      return;
-    }
-    setResult(res);
+    if (!("error" in res)) setResult(res);
     setPhaseSafe("finished");
-  }, [matchId, setPhaseSafe]);
+  }, [matchId, isLeader, computeScores, setPhaseSafe]);
 
   const lockAnswer = useCallback(
     (i: number | null) => {
@@ -112,10 +129,9 @@ export function VersusGame({
           ? TIMEOUT_MS
           : Math.round(performance.now() - questionStartRef.current);
 
-      setMyAnswers((prev) => ({
-        ...prev,
-        [qi]: { selectedIndex: i, correct, timeMs },
-      }));
+      const myAns: Answer = { selectedIndex: i, correct, timeMs };
+      myAnswersRef.current[qi] = myAns;
+      setMyAnswers((prev) => ({ ...prev, [qi]: myAns }));
 
       void supabase.from("match_answers").insert({
         match_id: matchId,
@@ -197,8 +213,10 @@ export function VersusGame({
         timeMs: payload.timeMs,
       };
       if (payload.playerId === currentUserId) {
+        myAnswersRef.current[i] = a;
         setMyAnswers((prev) => ({ ...prev, [i]: a }));
       } else {
+        oppAnswersRef.current[i] = a;
         setOppAnswers((prev) => ({ ...prev, [i]: a }));
       }
     });
@@ -437,7 +455,7 @@ export function VersusGame({
                   {mine?.selectedIndex === i && (
                     <Marker label={myName} avatar={myAvatar} mine />
                   )}
-                  {opp?.selectedIndex === i && (
+                  {showResult && opp?.selectedIndex === i && (
                     <Marker label={oppName} avatar={oppAvatar} />
                   )}
                 </span>

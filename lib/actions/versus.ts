@@ -1,7 +1,6 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { outcome, pointsForQuestion } from "@/lib/scoring";
 
 export interface VersusResult {
   scoreA: number;
@@ -12,14 +11,18 @@ export interface VersusResult {
 }
 
 /**
- * Compute the final scores of a 1v1 match from the persisted answers and mark
- * it finished (which triggers the per-player win/loss/score stats update).
+ * Record the final scores of a 1v1 match and mark it finished (which fires the
+ * per-player win/loss/score + topic stats trigger).
  *
- * Safe to call by either player and more than once: the update only fires the
- * finish trigger on the first active -> finished transition.
+ * Scores are computed on the clients from the realtime answer stream (which is
+ * complete and matches what both players saw), then submitted here. Safe to
+ * call by either player and more than once: only the first active -> finished
+ * transition writes, so the trigger never double-counts.
  */
-export async function finalizeVersusMatch(
+export async function submitVersusResult(
   matchId: string,
+  scoreA: number,
+  scoreB: number,
 ): Promise<VersusResult | { error: string }> {
   const supabase = await createClient();
   const {
@@ -33,8 +36,10 @@ export async function finalizeVersusMatch(
     .eq("id", matchId)
     .single();
   if (mErr || !match) return { error: "Match not found." };
+  if (match.player_a !== user.id && match.player_b !== user.id) {
+    return { error: "Not your match." };
+  }
 
-  // Already finalized — return stored result.
   if (match.status === "finished") {
     return {
       scoreA: match.score_a,
@@ -45,58 +50,34 @@ export async function finalizeVersusMatch(
     };
   }
 
-  const questionIds = match.question_ids as string[];
-  const posById = new Map(questionIds.map((id, i) => [id, i]));
+  const max = (match.question_ids as string[]).length + 1;
+  const a = Math.max(0, Math.min(max, Math.round(scoreA)));
+  const b = Math.max(0, Math.min(max, Math.round(scoreB)));
+  const winner = a > b ? match.player_a : b > a ? match.player_b : null;
 
-  const { data: answers } = await supabase
-    .from("match_answers")
-    .select("user_id, question_id, is_correct, time_ms")
-    .eq("match_id", matchId);
-
-  // For each question, the FIRST correct answer (smallest time) wins the point.
-  type Best = { userId: string; timeMs: number };
-  const bestByQuestion = new Map<string, Best>();
-  for (const a of answers ?? []) {
-    if (!a.is_correct) continue;
-    const qid = a.question_id as string;
-    const t = (a.time_ms as number | null) ?? Number.MAX_SAFE_INTEGER;
-    const cur = bestByQuestion.get(qid);
-    if (!cur || t < cur.timeMs) {
-      bestByQuestion.set(qid, { userId: a.user_id as string, timeMs: t });
-    }
-  }
-
-  let scoreA = 0;
-  let scoreB = 0;
-  for (const [qid, best] of bestByQuestion) {
-    const pos = posById.get(qid);
-    if (pos == null) continue;
-    const pts = pointsForQuestion(pos, questionIds.length);
-    if (best.userId === match.player_a) scoreA += pts;
-    else if (best.userId === match.player_b) scoreB += pts;
-  }
-
-  const code = outcome(scoreA, scoreB);
-  const winner =
-    code === "a" ? match.player_a : code === "b" ? match.player_b : null;
-
-  // Only transition once (guards the stats trigger against double counting).
   await supabase
     .from("matches")
     .update({
       status: "finished",
-      score_a: scoreA,
-      score_b: scoreB,
+      score_a: a,
+      score_b: b,
       winner,
       finished_at: new Date().toISOString(),
     })
     .eq("id", matchId)
     .neq("status", "finished");
 
+  // Re-read so both players converge on the stored (first-writer) result.
+  const { data: fresh } = await supabase
+    .from("matches")
+    .select("score_a, score_b, winner, player_a, player_b")
+    .eq("id", matchId)
+    .single();
+
   return {
-    scoreA,
-    scoreB,
-    winner,
+    scoreA: fresh?.score_a ?? a,
+    scoreB: fresh?.score_b ?? b,
+    winner: fresh?.winner ?? winner,
     playerA: match.player_a,
     playerB: match.player_b,
   };

@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { QUESTIONS_PER_MATCH } from "@/lib/scoring";
 
 export interface VersusResult {
   scoreA: number;
@@ -81,4 +82,55 @@ export async function submitVersusResult(
     playerA: match.player_a,
     playerB: match.player_b,
   };
+}
+
+/**
+ * Create a rematch: a new active match with the same two players (same topic)
+ * and a fresh set of random questions. Called by the leader (player_a) once
+ * both players have accepted the rematch.
+ */
+export async function createRematch(
+  prevMatchId: string,
+): Promise<{ matchId?: string; error?: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "You are not signed in." };
+
+  const { data: prev, error: pErr } = await supabase
+    .from("matches")
+    .select("topic_id, player_a, player_b")
+    .eq("id", prevMatchId)
+    .single();
+  if (pErr || !prev) return { error: "Match not found." };
+  if (prev.player_a !== user.id) return { error: "Only the host can rematch." };
+  if (!prev.player_b) return { error: "No opponent to rematch." };
+
+  const { data: qs } = await supabase
+    .from("questions")
+    .select("id")
+    .eq("topic_id", prev.topic_id);
+  const ids = (qs ?? []).map((q) => q.id as string);
+  if (ids.length === 0) return { error: "This topic has no questions." };
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+
+  const { data: match, error: mErr } = await supabase
+    .from("matches")
+    .insert({
+      topic_id: prev.topic_id,
+      player_a: prev.player_a,
+      player_b: prev.player_b,
+      question_ids: ids.slice(0, QUESTIONS_PER_MATCH),
+      status: "active",
+      started_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (mErr) return { error: mErr.message };
+
+  return { matchId: match.id as string };
 }

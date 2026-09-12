@@ -2,8 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { submitVersusResult, type VersusResult } from "@/lib/actions/versus";
+import {
+  createRematch,
+  submitVersusResult,
+  type VersusResult,
+} from "@/lib/actions/versus";
 import { pointsForQuestion, SECONDS_PER_QUESTION } from "@/lib/scoring";
 import { createClient } from "@/lib/supabase/client";
 import type { Question } from "@/lib/types";
@@ -45,6 +50,7 @@ export function VersusGame({
   topicName: string;
 }) {
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
   const isLeader = currentUserId === playerA;
   const myName = isLeader ? nameA : nameB;
   const oppName = isLeader ? nameB : nameA;
@@ -59,6 +65,9 @@ export function VersusGame({
   const [oppAnswers, setOppAnswers] = useState<Record<number, Answer>>({});
   const [revealed, setRevealed] = useState<Record<number, true>>({});
   const [result, setResult] = useState<VersusResult | null>(null);
+  const [myRematch, setMyRematch] = useState(false);
+  const [oppRematch, setOppRematch] = useState(false);
+  const rematchStartedRef = useRef(false);
 
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lockedRef = useRef(false);
@@ -114,6 +123,32 @@ export function VersusGame({
     if (!("error" in res)) setResult(res);
     setPhaseSafe("finished");
   }, [matchId, isLeader, computeScores, setPhaseSafe]);
+
+  function requestRematch() {
+    setMyRematch(true);
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "rematch",
+      payload: { playerId: currentUserId },
+    });
+  }
+
+  // When both players accept, the host creates the rematch and sends everyone in.
+  useEffect(() => {
+    if (myRematch && oppRematch && isLeader && !rematchStartedRef.current) {
+      rematchStartedRef.current = true;
+      (async () => {
+        const res = await createRematch(matchId);
+        if (res.matchId) {
+          channelRef.current?.send({
+            type: "broadcast",
+            event: "rematch_go",
+            payload: { matchId: res.matchId },
+          });
+        }
+      })();
+    }
+  }, [myRematch, oppRematch, isLeader, matchId]);
 
   const lockAnswer = useCallback(
     (i: number | null) => {
@@ -223,6 +258,14 @@ export function VersusGame({
     channel.on("broadcast", { event: "end" }, () => {
       stopTimer();
       finalize();
+    });
+    channel.on("broadcast", { event: "rematch" }, ({ payload }) => {
+      if (!mountedRef.current) return;
+      if (payload.playerId === currentUserId) setMyRematch(true);
+      else setOppRematch(true);
+    });
+    channel.on("broadcast", { event: "rematch_go" }, ({ payload }) => {
+      router.push(`/match/${payload.matchId}`);
     });
 
     channel.on("presence", { event: "sync" }, () => {
@@ -367,12 +410,32 @@ export function VersusGame({
             <span className="text-neutral-400">vs</span>
             <ScorePill name={oppName} score={finalOpp} highlight={!iWon && !tie} />
           </div>
-          <Link
-            href="/topics"
-            className="w-full rounded-xl bg-brand-600 px-4 py-3 text-center font-bold text-white transition hover:bg-brand-700"
-          >
-            Back to topics
-          </Link>
+
+          <div className="flex w-full flex-col gap-2">
+            {myRematch ? (
+              <p className="rounded-xl border border-neutral-300 px-4 py-3 text-center text-sm font-semibold text-neutral-500 dark:border-neutral-700">
+                Waiting for {oppName} to accept…
+              </p>
+            ) : (
+              <button
+                onClick={requestRematch}
+                className="w-full rounded-xl bg-brand-600 px-4 py-3 text-center font-bold text-white transition hover:bg-brand-700"
+              >
+                {oppRematch ? `Accept rematch 🔥` : "Rematch"}
+              </button>
+            )}
+            {oppRematch && (
+              <p className="text-center text-xs text-brand-600">
+                {oppName} wants a rematch!
+              </p>
+            )}
+            <Link
+              href="/topics"
+              className="w-full rounded-xl border border-neutral-300 px-4 py-3 text-center font-semibold text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
+            >
+              Back to topics
+            </Link>
+          </div>
         </div>
       </Shell>
     );

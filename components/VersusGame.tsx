@@ -16,8 +16,8 @@ import type { Question } from "@/lib/types";
 
 const READY_MS = 4000;
 const ANSWER_MS = SECONDS_PER_QUESTION * 1000;
-const REVEAL_MS = 2600;
-const WINDOW_MS = ANSWER_MS + REVEAL_MS;
+const REVEAL_MS = 2000;
+const BOTH_BUFFER_MS = 350; // brief pause after the 2nd answer before advancing
 
 type Answer = { display: number | null; correct: boolean; timeMs: number };
 type Clock =
@@ -104,17 +104,20 @@ export function VersusGame({
       myAnswersRef.current[forIndex] = ans;
       setMyAnswers((prev) => ({ ...prev, [forIndex]: ans }));
 
-      void supabase.from("match_answers").upsert(
-        {
-          match_id: matchId,
-          user_id: currentUserId,
-          question_id: q.id,
-          selected_index: original,
-          is_correct: correct,
-          time_ms: timeMs,
-        },
-        { onConflict: "match_id,user_id,question_id" },
-      );
+      void supabase
+        .from("match_answers")
+        .upsert(
+          {
+            match_id: matchId,
+            user_id: currentUserId,
+            question_id: q.id,
+            selected_index: original,
+            is_correct: correct,
+            time_ms: timeMs,
+          },
+          { onConflict: "match_id,user_id,question_id" },
+        )
+        .then(() => {});
       void channelRef.current?.send({
         type: "broadcast",
         event: "answer",
@@ -124,88 +127,115 @@ export function VersusGame({
     [currentUserId, matchId, orderFor, questions, supabase],
   );
 
-  // Clock: derive question progression from the shared start time so a reload
-  // rejoins at the right question instead of breaking the match.
+  // Progression schedule: each question runs for 10s, but ends early once BOTH
+  // players have answered. Derived every tick from the answer maps + shared
+  // clock, so it's deterministic across clients and survives reloads.
   useEffect(() => {
     const startBase = new Date(startedAt).getTime() + READY_MS;
+
     const tick = () => {
       const now = Date.now() + offsetRef.current;
-      const elapsed = now - startBase;
-      if (elapsed < 0) {
-        setClock({ kind: "ready", readyLeft: Math.ceil(-elapsed / 1000) });
+      if (now < startBase) {
+        setClock({
+          kind: "ready",
+          readyLeft: Math.max(1, Math.ceil((startBase - now) / 1000)),
+        });
         return;
       }
-      const index = Math.floor(elapsed / WINDOW_MS);
-      if (index >= total) {
-        setClock({ kind: "over" });
-        if (!endedRef.current) {
-          endedRef.current = true;
-          setEnded(true);
+
+      let start = startBase;
+      let index = 0;
+      for (;;) {
+        if (index >= total) {
+          setClock({ kind: "over" });
+          if (!endedRef.current) {
+            endedRef.current = true;
+            setEnded(true);
+          }
+          return;
         }
-        return;
+        const my = myAnswersRef.current[index];
+        const opp = oppAnswersRef.current[index];
+        let answerDur = ANSWER_MS;
+        if (my && opp) {
+          answerDur = Math.min(
+            ANSWER_MS,
+            Math.max(my.timeMs, opp.timeMs) + BOTH_BUFFER_MS,
+          );
+        }
+        const answerEnd = start + answerDur;
+        const revealEnd = answerEnd + REVEAL_MS;
+
+        if (now < revealEnd) {
+          questionStartRef.current = start;
+          const reveal = now >= answerEnd;
+          if (reveal && !my && !autoLockedRef.current.has(index)) {
+            autoLockedRef.current.add(index);
+            lockAnswer(null, index);
+          }
+          setClock({
+            kind: "play",
+            index,
+            reveal,
+            timeLeft: reveal ? 0 : (answerEnd - now) / 1000,
+          });
+          return;
+        }
+        start = revealEnd;
+        index++;
       }
-      const within = elapsed - index * WINDOW_MS;
-      const reveal = within >= ANSWER_MS;
-      questionStartRef.current = startBase + index * WINDOW_MS;
-      if (
-        reveal &&
-        !myAnswersRef.current[index] &&
-        !autoLockedRef.current.has(index)
-      ) {
-        autoLockedRef.current.add(index);
-        lockAnswer(null, index);
-      }
-      setClock({
-        kind: "play",
-        index,
-        timeLeft: reveal ? 0 : (ANSWER_MS - within) / 1000,
-        reveal,
-      });
     };
+
     tick();
     const id = setInterval(tick, 100);
     return () => clearInterval(id);
   }, [startedAt, total, lockAnswer]);
 
-  // Realtime channel + restore any answers already saved (survives reload).
+  // Realtime channel + fill answers from the DB (on load and periodically), so
+  // a missed broadcast or a reload self-heals and scoring stays complete.
   useEffect(() => {
     mountedRef.current = true;
+
+    const mergeFromDb = async () => {
+      const { data: rows } = await supabase
+        .from("match_answers")
+        .select("user_id, question_id, selected_index, is_correct, time_ms")
+        .eq("match_id", matchId);
+      if (!rows || !mountedRef.current) return;
+      const posById = new Map(questions.map((q, i) => [q.id, i]));
+      let changedMine = false;
+      let changedOpp = false;
+      for (const r of rows) {
+        const idx = posById.get(r.question_id as string);
+        if (idx == null) continue;
+        const isMine = r.user_id === currentUserId;
+        const target = isMine ? myAnswersRef.current : oppAnswersRef.current;
+        if (target[idx]) continue;
+        const original = r.selected_index as number | null;
+        const display =
+          original === null ? null : orderFor(idx).indexOf(original);
+        target[idx] = {
+          display,
+          correct: r.is_correct as boolean,
+          timeMs: (r.time_ms as number | null) ?? ANSWER_MS,
+        };
+        if (isMine) changedMine = true;
+        else changedOpp = true;
+      }
+      if (changedMine) setMyAnswers({ ...myAnswersRef.current });
+      if (changedOpp) setOppAnswers({ ...oppAnswersRef.current });
+    };
 
     (async () => {
       try {
         const { data } = await supabase.rpc("now_ms");
         if (typeof data === "number") offsetRef.current = data - Date.now();
       } catch {
-        // no server clock — local time is fine when devices are in sync
+        // no server clock — device time is used
       }
-      const { data: rows } = await supabase
-        .from("match_answers")
-        .select("user_id, question_id, selected_index, is_correct, time_ms")
-        .eq("match_id", matchId);
-      if (rows && mountedRef.current) {
-        const posById = new Map(questions.map((q, i) => [q.id, i]));
-        const mine: Record<number, Answer> = {};
-        const opp: Record<number, Answer> = {};
-        for (const r of rows) {
-          const idx = posById.get(r.question_id as string);
-          if (idx == null) continue;
-          const original = r.selected_index as number | null;
-          const display =
-            original === null ? null : orderFor(idx).indexOf(original);
-          const a: Answer = {
-            display,
-            correct: r.is_correct as boolean,
-            timeMs: (r.time_ms as number | null) ?? ANSWER_MS,
-          };
-          if (r.user_id === currentUserId) mine[idx] = a;
-          else opp[idx] = a;
-        }
-        myAnswersRef.current = mine;
-        oppAnswersRef.current = opp;
-        setMyAnswers(mine);
-        setOppAnswers(opp);
-      }
+      await mergeFromDb();
     })();
+    const syncTimer = setInterval(mergeFromDb, 4000);
 
     const channel = supabase.channel(`match:${matchId}`, {
       config: { broadcast: { self: true } },
@@ -232,7 +262,6 @@ export function VersusGame({
       if (payload.playerId === currentUserId) setMyRematch(true);
       else {
         setOppRematch(true);
-        // Re-announce our own request so both sides converge reliably.
         if (myRematchRef.current) {
           channelRef.current?.send({
             type: "broadcast",
@@ -245,34 +274,31 @@ export function VersusGame({
     channel.on("broadcast", { event: "rematch_go" }, ({ payload }) => {
       router.push(`/match/${payload.matchId}`);
     });
-
     channel.subscribe();
 
     return () => {
       mountedRef.current = false;
+      clearInterval(syncTimer);
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
-  // Finalize from the database once the clock ends (correct even after reloads).
+  // Finalize from the database once the clock ends.
   useEffect(() => {
     if (!ended || finalizeStartedRef.current) return;
     finalizeStartedRef.current = true;
-    const t = setTimeout(async () => {
+    const run = async () => {
       const res = await finalizeVersusMatch(matchId);
       if (!mountedRef.current) return;
       if (!("error" in res)) setResult(res);
-      else
-        setTimeout(async () => {
-          const r2 = await finalizeVersusMatch(matchId);
-          if (mountedRef.current && !("error" in r2)) setResult(r2);
-        }, 1500);
-    }, 1200);
+      else setTimeout(run, 1500);
+    };
+    const t = setTimeout(run, 1200);
     return () => clearTimeout(t);
   }, [ended, matchId]);
 
-  // Rematch: host creates the match once both accept.
+  // Rematch handshake.
   useEffect(() => {
     myRematchRef.current = myRematch;
     if (myRematch && oppRematch && isLeader && !rematchStartedRef.current) {
@@ -290,7 +316,6 @@ export function VersusGame({
     }
   }, [myRematch, oppRematch, isLeader, matchId]);
 
-  // Don't leave the requester stuck if the opponent never accepts.
   useEffect(() => {
     if (!myRematch) return;
     const t = setTimeout(() => {
@@ -341,7 +366,6 @@ export function VersusGame({
     else if (w.who === "opp") oppScore += w.pts;
   }
 
-  // ---- Ready ----
   if (clock.kind === "ready") {
     return (
       <Shell>
@@ -350,7 +374,7 @@ export function VersusGame({
             {myName} vs {oppName} · {topicName}
           </p>
           <p className="text-6xl font-extrabold text-brand-600">
-            {clock.readyLeft > 0 ? clock.readyLeft : "Go!"}
+            {clock.readyLeft}
           </p>
           <p className="text-sm text-neutral-400">Get ready…</p>
         </div>
@@ -358,7 +382,6 @@ export function VersusGame({
     );
   }
 
-  // ---- Finalizing ----
   if (ended && !result) {
     return (
       <Shell>
@@ -369,7 +392,6 @@ export function VersusGame({
     );
   }
 
-  // ---- Result ----
   if (ended && result) {
     const finalMy = isLeader ? result.scoreA : result.scoreB;
     const finalOpp = isLeader ? result.scoreB : result.scoreA;
@@ -391,7 +413,6 @@ export function VersusGame({
             <span className="text-neutral-400">vs</span>
             <ScorePill name={oppName} score={finalOpp} highlight={!iWon && !tie} />
           </div>
-
           <div className="flex w-full flex-col gap-2">
             {myRematch ? (
               <p className="rounded-xl border border-neutral-300 px-4 py-3 text-center text-sm font-semibold text-neutral-500 dark:border-neutral-700">
@@ -458,7 +479,6 @@ export function VersusGame({
         />
       </div>
 
-      {/* Point flash */}
       <div className="h-6 text-center">
         {reveal && win && (
           <span

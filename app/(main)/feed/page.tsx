@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { ChallengesPanel } from "@/components/ChallengesPanel";
 import { getCurrentUserAndProfile } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import { timeAgo } from "@/lib/time";
@@ -77,6 +78,8 @@ export default async function FeedPage() {
   return (
     <main className="flex flex-col gap-4 px-5 py-6">
       <h1 className="text-2xl font-extrabold text-brand-600">Feed</h1>
+
+      <ChallengesPanel />
 
       {matches.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-neutral-300 p-6 text-center text-sm text-neutral-500 dark:border-neutral-700">

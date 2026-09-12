@@ -138,7 +138,15 @@ export default async function ProfilePage({
           )}
         </div>
         {!isMe && user && (
-          <FollowButton userId={profile.id} initialFollowing={amIFollowing} />
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <FollowButton userId={profile.id} initialFollowing={amIFollowing} />
+            <Link
+              href={`/challenge/${profile.username}`}
+              className="rounded-xl bg-brand-600 px-5 py-2 text-sm font-bold text-white transition hover:bg-brand-700"
+            >
+              ⚔️ Challenge
+            </Link>
+          </div>
         )}
       </header>
 

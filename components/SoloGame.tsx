@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -250,6 +251,18 @@ export function SoloGame({
           )}
           <h2 className="text-xl font-bold leading-snug">{current.text}</h2>
         </div>
+
+        {current.image_url && (
+          <div className="relative mx-auto h-44 w-full overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-900">
+            <Image
+              src={current.image_url}
+              alt=""
+              fill
+              unoptimized
+              className="object-contain"
+            />
+          </div>
+        )}
 
         <div className="grid gap-3">
           {current.answers.map((answer, i) => {

@@ -84,9 +84,29 @@ export async function addQuestion(
   } = await supabase.auth.getUser();
   if (!user) redirect("/sign-in");
 
+  // Optional image upload.
+  let imageUrl: string | null = null;
+  const image = formData.get("image");
+  if (image instanceof File && image.size > 0) {
+    if (image.size > 5 * 1024 * 1024) {
+      return { error: "Image must be 5 MB or smaller." };
+    }
+    const ext = (image.name.split(".").pop() || "jpg").toLowerCase();
+    const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+    const { error: upErr } = await supabase.storage
+      .from("question-images")
+      .upload(path, image, { contentType: image.type, upsert: false });
+    if (upErr) return { error: `Image upload failed: ${upErr.message}` };
+    const { data: pub } = supabase.storage
+      .from("question-images")
+      .getPublicUrl(path);
+    imageUrl = pub.publicUrl;
+  }
+
   const { error } = await supabase.from("questions").insert({
     topic_id: topicId,
     text,
+    image_url: imageUrl,
     answers,
     correct_index: correctIndex,
     created_by: user.id,

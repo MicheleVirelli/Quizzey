@@ -53,6 +53,16 @@ export function AddQuestionForm({
           />
         </label>
 
+        <label className="flex flex-col gap-1 text-sm font-medium">
+          Image <span className="font-normal text-neutral-400">(optional)</span>
+          <input
+            type="file"
+            name="image"
+            accept="image/*"
+            className="rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-brand-600 file:px-3 file:py-1.5 file:font-semibold file:text-white dark:border-neutral-700 dark:bg-neutral-900"
+          />
+        </label>
+
         <p className="text-sm font-medium">Answers (tap the circle to mark the correct one)</p>
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className="flex items-center gap-3">

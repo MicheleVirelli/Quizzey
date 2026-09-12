@@ -35,6 +35,7 @@ export interface Question {
   id: string;
   topic_id: string;
   text: string;
+  image_url: string | null;
   answers: string[]; // exactly 4
   correct_index: number; // 0..3
   difficulty: number;

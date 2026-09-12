@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { finalizeVersusMatch, type VersusResult } from "@/lib/actions/versus";
@@ -8,18 +9,18 @@ import { createClient } from "@/lib/supabase/client";
 import type { Question } from "@/lib/types";
 
 const READY_MS = 3000;
-const REVEAL_MS = 2500;
+const REVEAL_MS = 1600;
+const TIMEOUT_MS = SECONDS_PER_QUESTION * 1000;
 
 type Phase =
   | "connecting"
   | "waiting"
   | "ready"
   | "question"
-  | "reveal"
   | "finalizing"
   | "finished";
 
-type Answer = { selectedIndex: number | null; correct: boolean };
+type Answer = { selectedIndex: number | null; correct: boolean; timeMs: number };
 
 export function VersusGame({
   matchId,
@@ -47,21 +48,23 @@ export function VersusGame({
 
   const [phase, setPhase] = useState<Phase>("connecting");
   const [index, setIndex] = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [locked, setLocked] = useState(false);
   const [timeLeft, setTimeLeft] = useState(SECONDS_PER_QUESTION);
   const [myAnswers, setMyAnswers] = useState<Record<number, Answer>>({});
   const [oppAnswers, setOppAnswers] = useState<Record<number, Answer>>({});
+  const [revealed, setRevealed] = useState<Record<number, true>>({});
   const [result, setResult] = useState<VersusResult | null>(null);
 
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lockedRef = useRef(false);
   const indexRef = useRef(0);
   const phaseRef = useRef<Phase>("connecting");
+  const questionStartRef = useRef(0);
   const startedRef = useRef(false);
   const bothPresentRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const answeredByIndex = useRef<Map<number, Set<string>>>(new Map());
+  const leaderCheckRef = useRef<(() => void) | null>(null);
 
   const setPhaseSafe = useCallback((p: Phase) => {
     phaseRef.current = p;
@@ -78,7 +81,6 @@ export function VersusGame({
     const res = await finalizeVersusMatch(matchId);
     if (!mountedRef.current) return;
     if ("error" in res) {
-      // Retry once after a short delay (opponent may still be writing).
       setTimeout(async () => {
         const retry = await finalizeVersusMatch(matchId);
         if (mountedRef.current && !("error" in retry)) setResult(retry);
@@ -94,27 +96,39 @@ export function VersusGame({
     (i: number | null) => {
       if (lockedRef.current) return;
       lockedRef.current = true;
-      setLocked(true);
-      setSelected(i);
       stopTimer();
 
       const qi = indexRef.current;
       const q = questions[qi];
       const correct = i !== null && i === q.correct_index;
-      setMyAnswers((prev) => ({ ...prev, [qi]: { selectedIndex: i, correct } }));
+      const timeMs =
+        i === null
+          ? TIMEOUT_MS
+          : Math.round(performance.now() - questionStartRef.current);
 
-      // Persist (best effort) and tell the opponent.
+      setMyAnswers((prev) => ({
+        ...prev,
+        [qi]: { selectedIndex: i, correct, timeMs },
+      }));
+
       void supabase.from("match_answers").insert({
         match_id: matchId,
         user_id: currentUserId,
         question_id: q.id,
         selected_index: i,
         is_correct: correct,
+        time_ms: timeMs,
       });
       void channelRef.current?.send({
         type: "broadcast",
         event: "answer",
-        payload: { index: qi, playerId: currentUserId, selectedIndex: i, correct },
+        payload: {
+          index: qi,
+          playerId: currentUserId,
+          selectedIndex: i,
+          correct,
+          timeMs,
+        },
       });
     },
     [currentUserId, matchId, questions, stopTimer, supabase],
@@ -123,11 +137,12 @@ export function VersusGame({
   const startTimer = useCallback(() => {
     stopTimer();
     setTimeLeft(SECONDS_PER_QUESTION);
-    const start = performance.now();
+    questionStartRef.current = performance.now();
     intervalRef.current = setInterval(() => {
       const left = Math.max(
         0,
-        SECONDS_PER_QUESTION - (performance.now() - start) / 1000,
+        SECONDS_PER_QUESTION -
+          (performance.now() - questionStartRef.current) / 1000,
       );
       setTimeLeft(left);
       if (left <= 0) {
@@ -137,14 +152,10 @@ export function VersusGame({
     }, 100);
   }, [lockAnswer, stopTimer]);
 
-  // Set up the realtime channel once.
   useEffect(() => {
     mountedRef.current = true;
     const channel = supabase.channel(`match:${matchId}`, {
-      config: {
-        broadcast: { self: true },
-        presence: { key: currentUserId },
-      },
+      config: { broadcast: { self: true }, presence: { key: currentUserId } },
     });
     channelRef.current = channel;
 
@@ -157,29 +168,32 @@ export function VersusGame({
       lockedRef.current = false;
       if (!mountedRef.current) return;
       setIndex(i);
-      setSelected(null);
-      setLocked(false);
       setPhaseSafe("question");
       startTimer();
     });
-    channel.on("broadcast", { event: "reveal" }, () => {
+    channel.on("broadcast", { event: "reveal" }, ({ payload }) => {
       lockedRef.current = true;
       stopTimer();
-      if (mountedRef.current) {
-        setLocked(true);
-        setPhaseSafe("reveal");
-      }
+      if (!mountedRef.current) return;
+      setRevealed((prev) => ({ ...prev, [payload.index]: true }));
     });
     channel.on("broadcast", { event: "answer" }, ({ payload }) => {
+      const i = payload.index as number;
+      const set = answeredByIndex.current.get(i) ?? new Set<string>();
+      set.add(payload.playerId);
+      answeredByIndex.current.set(i, set);
+      if (leaderCheckRef.current) leaderCheckRef.current();
+
       if (!mountedRef.current) return;
       const a: Answer = {
         selectedIndex: payload.selectedIndex,
         correct: payload.correct,
+        timeMs: payload.timeMs,
       };
       if (payload.playerId === currentUserId) {
-        setMyAnswers((prev) => ({ ...prev, [payload.index]: a }));
+        setMyAnswers((prev) => ({ ...prev, [i]: a }));
       } else {
-        setOppAnswers((prev) => ({ ...prev, [payload.index]: a }));
+        setOppAnswers((prev) => ({ ...prev, [i]: a }));
       }
     });
     channel.on("broadcast", { event: "end" }, () => {
@@ -189,11 +203,7 @@ export function VersusGame({
 
     channel.on("presence", { event: "sync" }, () => {
       const count = Object.keys(channel.presenceState()).length;
-      const both = count >= 2;
-      bothPresentRef.current = both;
-      if (both && mountedRef.current && phaseRef.current === "waiting") {
-        // stay in waiting until the leader kicks off
-      }
+      bothPresentRef.current = count >= 2;
       maybeStartAsLeader();
     });
 
@@ -217,12 +227,32 @@ export function VersusGame({
         channelRef.current?.send({ type: "broadcast", event, payload });
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+      // Wait until both players have answered question i, or the time runs out.
+      const waitForBoth = (i: number) =>
+        new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            leaderCheckRef.current = null;
+            clearTimeout(timer);
+            resolve();
+          };
+          const check = () => {
+            const set = answeredByIndex.current.get(i);
+            if (set && set.size >= 2) finish();
+          };
+          const timer = setTimeout(finish, TIMEOUT_MS + 400);
+          leaderCheckRef.current = check;
+          check();
+        });
+
       send("ready");
       await sleep(READY_MS);
       for (let i = 0; i < total; i++) {
         if (!mountedRef.current) return;
         send("q", { index: i });
-        await sleep(SECONDS_PER_QUESTION * 1000);
+        await waitForBoth(i);
         if (!mountedRef.current) return;
         send("reveal", { index: i });
         await sleep(REVEAL_MS);
@@ -238,21 +268,27 @@ export function VersusGame({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
-  // ---- Derived scores (opponent correctness only shown after reveal) ----
-  const scoreFrom = (map: Record<number, Answer>) => {
-    let s = 0;
-    for (const [k, v] of Object.entries(map)) {
-      const qi = Number(k);
-      const settled =
-        qi < index || (qi === index && phaseRef.current === "reveal");
-      if (settled && v.correct) s += pointsForQuestion(qi, total);
-    }
-    return s;
+  // ---- Race scoring: first correct answer wins the question's points ----
+  const questionPoints = (i: number): [number, number] => {
+    const mine = myAnswers[i];
+    const opp = oppAnswers[i];
+    const pts = pointsForQuestion(i, total);
+    const myOk = mine?.correct;
+    const oppOk = opp?.correct;
+    if (myOk && oppOk) return mine.timeMs <= opp.timeMs ? [pts, 0] : [0, pts];
+    if (myOk) return [pts, 0];
+    if (oppOk) return [0, pts];
+    return [0, 0];
   };
-  const myScore = scoreFrom(myAnswers);
-  const oppScore = scoreFrom(oppAnswers);
+  let myScore = 0;
+  let oppScore = 0;
+  for (const k of Object.keys(revealed)) {
+    const [m, o] = questionPoints(Number(k));
+    myScore += m;
+    oppScore += o;
+  }
 
-  // ---- Waiting / connecting ----
+  // ---- Waiting / ready ----
   if (phase === "connecting" || phase === "waiting" || phase === "ready") {
     return (
       <Shell>
@@ -267,10 +303,7 @@ export function VersusGame({
             </p>
           </div>
           {phase !== "ready" && (
-            <Link
-              href="/topics"
-              className="text-sm text-neutral-500 hover:underline"
-            >
+            <Link href="/topics" className="text-sm text-neutral-500 hover:underline">
               Leave
             </Link>
           )}
@@ -279,7 +312,6 @@ export function VersusGame({
     );
   }
 
-  // ---- Finalizing ----
   if (phase === "finalizing") {
     return (
       <Shell>
@@ -290,18 +322,9 @@ export function VersusGame({
     );
   }
 
-  // ---- Result ----
   if (phase === "finished") {
-    const finalMy = result
-      ? isLeader
-        ? result.scoreA
-        : result.scoreB
-      : myScore;
-    const finalOpp = result
-      ? isLeader
-        ? result.scoreB
-        : result.scoreA
-      : oppScore;
+    const finalMy = result ? (isLeader ? result.scoreA : result.scoreB) : myScore;
+    const finalOpp = result ? (isLeader ? result.scoreB : result.scoreA) : oppScore;
     const iWon = result?.winner === currentUserId;
     const tie = result ? result.winner === null : finalMy === finalOpp;
     const heading = tie ? "It's a tie!" : iWon ? "You won! 🎉" : "You lost";
@@ -312,11 +335,7 @@ export function VersusGame({
           <p className="text-sm font-semibold uppercase tracking-wide text-neutral-400">
             {topicName}
           </p>
-          <h1
-            className={`text-3xl font-extrabold ${
-              iWon ? "text-brand-600" : ""
-            }`}
-          >
+          <h1 className={`text-3xl font-extrabold ${iWon ? "text-brand-600" : ""}`}>
             {heading}
           </h1>
           <div className="flex items-center gap-6">
@@ -335,11 +354,14 @@ export function VersusGame({
     );
   }
 
-  // ---- Playing (question / reveal) ----
+  // ---- Playing ----
   const current = questions[index];
   const isLast = index === total - 1;
   const timePct = (timeLeft / SECONDS_PER_QUESTION) * 100;
-  const oppAnsweredNow = Boolean(oppAnswers[index]);
+  const mine = myAnswers[index];
+  const opp = oppAnswers[index];
+  const iAnswered = Boolean(mine);
+  const showResult = iAnswered || Boolean(revealed[index]);
 
   return (
     <Shell>
@@ -355,15 +377,6 @@ export function VersusGame({
         </span>
       </div>
 
-      <div className="mt-1 flex items-center gap-2 text-xs text-neutral-400">
-        <span
-          className={`inline-block h-2 w-2 rounded-full ${
-            oppAnsweredNow ? "bg-green-500" : "bg-neutral-300 dark:bg-neutral-700"
-          }`}
-        />
-        {oppAnsweredNow ? `${oppName} answered` : `${oppName} is thinking…`}
-      </div>
-
       <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
         <div
           className="h-full rounded-full bg-brand-600 transition-[width] duration-100 ease-linear"
@@ -371,7 +384,7 @@ export function VersusGame({
         />
       </div>
 
-      <div className="flex flex-1 flex-col justify-center gap-6 py-6">
+      <div className="flex flex-1 flex-col justify-center gap-5 py-4">
         <div className="text-center">
           {isLast && (
             <span className="mb-2 inline-block rounded-full bg-brand-100 px-3 py-1 text-xs font-bold text-brand-700 dark:bg-brand-950 dark:text-brand-300">
@@ -381,18 +394,27 @@ export function VersusGame({
           <h2 className="text-xl font-bold leading-snug">{current.text}</h2>
         </div>
 
+        {current.image_url && (
+          <div className="relative mx-auto h-44 w-full overflow-hidden rounded-xl bg-neutral-100 dark:bg-neutral-900">
+            <Image
+              src={current.image_url}
+              alt=""
+              fill
+              unoptimized
+              className="object-contain"
+            />
+          </div>
+        )}
+
         <div className="grid gap-3">
           {current.answers.map((answer, i) => {
             let cls =
               "border-neutral-300 bg-white dark:border-neutral-700 dark:bg-neutral-900";
-            if (locked) {
-              if (phase === "reveal" && i === current.correct_index) {
+            if (showResult) {
+              if (i === current.correct_index) {
                 cls = "border-green-500 bg-green-50 dark:bg-green-950/50";
-              } else if (i === selected) {
-                cls =
-                  phase === "reveal" && i !== current.correct_index
-                    ? "border-brand-500 bg-brand-50 dark:bg-brand-950/50"
-                    : "border-neutral-400 bg-neutral-50 dark:bg-neutral-800";
+              } else if (i === mine?.selectedIndex) {
+                cls = "border-brand-500 bg-brand-50 dark:bg-brand-950/50";
               } else {
                 cls = "border-neutral-200 opacity-60 dark:border-neutral-800";
               }
@@ -400,17 +422,36 @@ export function VersusGame({
             return (
               <button
                 key={i}
-                disabled={locked}
+                disabled={iAnswered}
                 onClick={() => lockAnswer(i)}
-                className={`rounded-xl border-2 px-4 py-4 text-left text-base font-medium transition ${cls}`}
+                className={`flex items-center justify-between gap-2 rounded-xl border-2 px-4 py-4 text-left text-base font-medium transition ${cls}`}
               >
-                {answer}
+                <span>{answer}</span>
+                <span className="flex items-center gap-1">
+                  {mine?.selectedIndex === i && (
+                    <Marker label={myName} mine />
+                  )}
+                  {opp?.selectedIndex === i && <Marker label={oppName} />}
+                </span>
               </button>
             );
           })}
         </div>
       </div>
     </Shell>
+  );
+}
+
+function Marker({ label, mine }: { label: string; mine?: boolean }) {
+  return (
+    <span
+      title={label}
+      className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-white ${
+        mine ? "bg-brand-600" : "bg-neutral-700 dark:bg-neutral-500"
+      }`}
+    >
+      {label.charAt(0).toUpperCase()}
+    </span>
   );
 }
 

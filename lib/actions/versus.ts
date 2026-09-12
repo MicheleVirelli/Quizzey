@@ -50,18 +50,30 @@ export async function finalizeVersusMatch(
 
   const { data: answers } = await supabase
     .from("match_answers")
-    .select("user_id, question_id, is_correct")
+    .select("user_id, question_id, is_correct, time_ms")
     .eq("match_id", matchId);
+
+  // For each question, the FIRST correct answer (smallest time) wins the point.
+  type Best = { userId: string; timeMs: number };
+  const bestByQuestion = new Map<string, Best>();
+  for (const a of answers ?? []) {
+    if (!a.is_correct) continue;
+    const qid = a.question_id as string;
+    const t = (a.time_ms as number | null) ?? Number.MAX_SAFE_INTEGER;
+    const cur = bestByQuestion.get(qid);
+    if (!cur || t < cur.timeMs) {
+      bestByQuestion.set(qid, { userId: a.user_id as string, timeMs: t });
+    }
+  }
 
   let scoreA = 0;
   let scoreB = 0;
-  for (const a of answers ?? []) {
-    if (!a.is_correct) continue;
-    const pos = posById.get(a.question_id as string);
+  for (const [qid, best] of bestByQuestion) {
+    const pos = posById.get(qid);
     if (pos == null) continue;
     const pts = pointsForQuestion(pos, questionIds.length);
-    if (a.user_id === match.player_a) scoreA += pts;
-    else if (a.user_id === match.player_b) scoreB += pts;
+    if (best.userId === match.player_a) scoreA += pts;
+    else if (best.userId === match.player_b) scoreB += pts;
   }
 
   const code = outcome(scoreA, scoreB);

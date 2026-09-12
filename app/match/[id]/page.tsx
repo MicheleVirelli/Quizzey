@@ -41,13 +41,16 @@ export default async function MatchPage({
   const ids = [match.player_a, match.player_b].filter(Boolean) as string[];
   const { data: profiles } = await supabase
     .from("profiles")
-    .select("id, username, display_name")
+    .select("id, username, display_name, avatar_url")
     .in("id", ids);
+  const profOf = (uid: string | null) =>
+    uid ? (profiles ?? []).find((x) => x.id === uid) : undefined;
   const nameOf = (uid: string | null) => {
-    if (!uid) return "Opponent";
-    const p = (profiles ?? []).find((x) => x.id === uid);
+    const p = profOf(uid);
     return (p?.display_name as string) ?? (p?.username as string) ?? "Player";
   };
+  const avatarOf = (uid: string | null) =>
+    (profOf(uid)?.avatar_url as string | null) ?? null;
 
   const { data: topic } = await supabase
     .from("topics")
@@ -63,6 +66,8 @@ export default async function MatchPage({
       playerB={match.player_b}
       nameA={nameOf(match.player_a)}
       nameB={nameOf(match.player_b)}
+      avatarA={avatarOf(match.player_a)}
+      avatarB={avatarOf(match.player_b)}
       questions={questions}
       topicName={topic?.name ?? "Match"}
     />

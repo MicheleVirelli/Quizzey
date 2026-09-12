@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { countryByCode } from "@/lib/countries";
 import { getCurrentUserAndProfile } from "@/lib/data";
@@ -18,7 +19,7 @@ export default async function LeaderboardPage({
   const supabase = await createClient();
   let query = supabase
     .from("profiles")
-    .select("id, username, display_name, country, total_score")
+    .select("id, username, display_name, country, total_score, avatar_url")
     .order("total_score", { ascending: false })
     .limit(50);
   if (countryScope && profile?.country) {
@@ -47,27 +48,46 @@ export default async function LeaderboardPage({
           const isMe = row.id === profile?.id;
           const c = countryByCode(row.country ?? null);
           return (
-            <li
-              key={row.id}
-              className={`flex items-center gap-3 rounded-xl px-3 py-2 ${
-                isMe
-                  ? "bg-brand-50 dark:bg-brand-950/40"
-                  : "odd:bg-neutral-50 dark:odd:bg-neutral-900/50"
-              }`}
-            >
-              <span className="w-6 text-center font-bold text-neutral-400">
-                {i + 1}
-              </span>
-              <span className="flex-1 truncate font-medium">
-                {row.display_name ?? row.username}
-                {isMe && (
-                  <span className="ml-1 text-xs text-brand-600">(you)</span>
-                )}
-              </span>
-              {!countryScope && c && <span>{c.flag}</span>}
-              <span className="font-bold text-brand-600">
-                {row.total_score}
-              </span>
+            <li key={row.id}>
+              <Link
+                href={`/profile/${row.username}`}
+                className={`flex items-center gap-3 rounded-xl px-3 py-2 ${
+                  isMe
+                    ? "bg-brand-50 dark:bg-brand-950/40"
+                    : "odd:bg-neutral-50 dark:odd:bg-neutral-900/50"
+                }`}
+              >
+                <span className="w-6 text-center font-bold text-neutral-400">
+                  {i + 1}
+                </span>
+                <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-brand-600">
+                  {row.avatar_url ? (
+                    <Image
+                      src={row.avatar_url}
+                      alt=""
+                      fill
+                      unoptimized
+                      className="object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center text-sm font-bold text-white">
+                      {(row.display_name ?? row.username ?? "?")
+                        .charAt(0)
+                        .toUpperCase()}
+                    </span>
+                  )}
+                </span>
+                <span className="flex-1 truncate font-medium">
+                  {row.display_name ?? row.username}
+                  {isMe && (
+                    <span className="ml-1 text-xs text-brand-600">(you)</span>
+                  )}
+                </span>
+                {!countryScope && c && <span>{c.flag}</span>}
+                <span className="font-bold text-brand-600">
+                  {row.total_score}
+                </span>
+              </Link>
             </li>
           );
         })}

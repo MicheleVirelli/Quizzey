@@ -89,3 +89,40 @@ export async function updateProfile(
   revalidatePath("/settings");
   return { message: "Profile updated." };
 }
+
+export async function updateAvatar(
+  _prev: ProfileState,
+  formData: FormData,
+): Promise<ProfileState> {
+  const file = formData.get("avatar");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Choose an image first." };
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    return { error: "Image must be 5 MB or smaller." };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/sign-in");
+
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+  const { error: upErr } = await supabase.storage
+    .from("avatars")
+    .upload(path, file, { contentType: file.type, upsert: false });
+  if (upErr) return { error: `Upload failed: ${upErr.message}` };
+
+  const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
+  const { error } = await supabase
+    .from("profiles")
+    .update({ avatar_url: pub.publicUrl })
+    .eq("id", user.id);
+  if (error) return { error: error.message };
+
+  revalidatePath("/profile");
+  revalidatePath("/settings");
+  return { message: "Photo updated!" };
+}

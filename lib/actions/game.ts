@@ -107,6 +107,21 @@ export async function recordSoloMatch(
       .eq("id", user.id);
   }
 
+  // Per-topic stats (solo bypasses the match-finish trigger).
+  const { data: ts } = await supabase
+    .from("topic_stats")
+    .select("games, points, wins")
+    .eq("user_id", user.id)
+    .eq("topic_id", topicId)
+    .maybeSingle();
+  await supabase.from("topic_stats").upsert({
+    user_id: user.id,
+    topic_id: topicId,
+    games: ((ts?.games as number) ?? 0) + 1,
+    points: ((ts?.points as number) ?? 0) + score,
+    wins: (ts?.wins as number) ?? 0,
+  });
+
   revalidatePath("/profile");
   revalidatePath("/leaderboard");
 

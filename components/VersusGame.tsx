@@ -28,6 +28,8 @@ export function VersusGame({
   playerA,
   nameA,
   nameB,
+  avatarA,
+  avatarB,
   questions,
   topicName,
 }: {
@@ -37,6 +39,8 @@ export function VersusGame({
   playerB: string | null;
   nameA: string;
   nameB: string;
+  avatarA: string | null;
+  avatarB: string | null;
   questions: Question[];
   topicName: string;
 }) {
@@ -44,6 +48,8 @@ export function VersusGame({
   const isLeader = currentUserId === playerA;
   const myName = isLeader ? nameA : nameB;
   const oppName = isLeader ? nameB : nameA;
+  const myAvatar = isLeader ? avatarA : avatarB;
+  const oppAvatar = isLeader ? avatarB : avatarA;
   const total = questions.length;
 
   const [phase, setPhase] = useState<Phase>("connecting");
@@ -429,9 +435,11 @@ export function VersusGame({
                 <span>{answer}</span>
                 <span className="flex items-center gap-1">
                   {mine?.selectedIndex === i && (
-                    <Marker label={myName} mine />
+                    <Marker label={myName} avatar={myAvatar} mine />
                   )}
-                  {opp?.selectedIndex === i && <Marker label={oppName} />}
+                  {opp?.selectedIndex === i && (
+                    <Marker label={oppName} avatar={oppAvatar} />
+                  )}
                 </span>
               </button>
             );
@@ -442,7 +450,27 @@ export function VersusGame({
   );
 }
 
-function Marker({ label, mine }: { label: string; mine?: boolean }) {
+function Marker({
+  label,
+  avatar,
+  mine,
+}: {
+  label: string;
+  avatar?: string | null;
+  mine?: boolean;
+}) {
+  if (avatar) {
+    return (
+      <span
+        title={label}
+        className={`relative h-6 w-6 overflow-hidden rounded-full ring-2 ${
+          mine ? "ring-brand-600" : "ring-neutral-500"
+        }`}
+      >
+        <Image src={avatar} alt={label} fill unoptimized className="object-cover" />
+      </span>
+    );
+  }
   return (
     <span
       title={label}

@@ -36,6 +36,14 @@ export default async function PlayPage({
     .single();
   if (!topic) notFound();
 
+  const { data: me } = await supabase
+    .from("profiles")
+    .select("is_moderator")
+    .eq("id", user.id)
+    .single();
+  const canManage =
+    (topic as Topic).created_by === user.id || Boolean(me?.is_moderator);
+
   const { data: questions } = await supabase
     .from("questions")
     .select("*")
@@ -44,5 +52,11 @@ export default async function PlayPage({
   const pool = (questions as Question[] | null) ?? [];
   const soloQuestions = shuffle(pool).slice(0, QUESTIONS_PER_MATCH);
 
-  return <TopicLobby topic={topic as Topic} soloQuestions={soloQuestions} />;
+  return (
+    <TopicLobby
+      topic={topic as Topic}
+      soloQuestions={soloQuestions}
+      canManage={canManage}
+    />
+  );
 }

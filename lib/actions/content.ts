@@ -117,3 +117,55 @@ export async function addQuestion(
   revalidatePath(`/create/${topicId}`);
   return { message: "Question added!" };
 }
+
+export async function updateTopic(
+  topicId: string,
+  _prev: ContentState,
+  formData: FormData,
+): Promise<ContentState> {
+  const name = String(formData.get("name") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+  const category = String(formData.get("category") ?? "").trim();
+  const icon = String(formData.get("icon") ?? "").trim() || "❓";
+  const color = String(formData.get("color") ?? "").trim() || "#e11d48";
+
+  if (name.length < 3) {
+    return { error: "Topic name must be at least 3 characters." };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/sign-in");
+
+  const { error } = await supabase
+    .from("topics")
+    .update({
+      name,
+      description: description || null,
+      category: category || "Community",
+      icon,
+      color,
+    })
+    .eq("id", topicId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/topics");
+  revalidatePath(`/create/${topicId}`);
+  return { message: "Topic updated." };
+}
+
+export async function deleteQuestion(
+  questionId: string,
+  topicId: string,
+): Promise<void> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase.from("questions").delete().eq("id", questionId);
+  revalidatePath(`/create/${topicId}`);
+}

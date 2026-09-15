@@ -12,9 +12,11 @@ type Mode = "menu" | "solo" | "versus";
 export function TopicLobby({
   topic,
   soloQuestions,
+  canManage,
 }: {
   topic: Topic;
   soloQuestions: Question[];
+  canManage?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("menu");
 
@@ -63,6 +65,15 @@ export function TopicLobby({
               🧠 Practice solo
             </button>
           </div>
+        )}
+
+        {canManage && (
+          <Link
+            href={`/create/${topic.id}`}
+            className="text-sm font-semibold text-brand-600 hover:underline"
+          >
+            ✏️ Edit topic
+          </Link>
         )}
 
         <Link href="/topics" className="text-sm text-neutral-500 hover:underline">
